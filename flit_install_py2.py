@@ -10,6 +10,8 @@ from subprocess import check_call
 import sys
 import tempfile
 
+import pytoml
+
 pjoin = os.path.join
 
 __version__ = '0.1'
@@ -110,9 +112,24 @@ class RootInstallError(Exception):
 
 class Installer(object):
     def __init__(self, ini_path, user=None, symlink=False):
-        self.cfg = configparser.ConfigParser()
-        self.cfg.read([ini_path])
-        self.module = Module(self.cfg.get('metadata', 'module'))
+        if ini_path.endswith(".toml"):
+            with open(ini_path) as f:
+                data = pytoml.load(f)
+            meta = data["tool"]["flit"]["metadata"]
+            self.module = Module(meta["module"])
+            self.parsed_requirements = meta.get("requires", [])
+            self.parsed_requirements += meta.get("dev-requires", [])
+            self.parsed_scripts = {}  # TODO
+        else:
+            cfg = configparser.ConfigParser()
+            cfg.read([ini_path])
+            self.module = Module(cfg.get('metadata', 'module'))
+            requires_dist = cfg.get('metadata', 'requires', fallback='').splitlines()
+            dev_requires = cfg.get('metadata', 'dev-requires', fallback='').splitlines()
+            self.parsed_requirements = requires_dist + dev_requires
+            self.parsed_scripts = {}
+            if "scripts" in  cfg:
+                self.parsed_scripts = cfg["scripts"]
 
         if user is None:
             self.user = site.ENABLE_USER_SITE
@@ -150,9 +167,7 @@ class Installer(object):
         Creates a temporary requirements.txt from requires_dist metadata.
         """
          # construct the full list of requirements, including dev requirements
-        requires_dist = self.cfg.get('metadata', 'requires', fallback='').splitlines()
-        dev_requires = self.cfg.get('metadata', 'dev-requires', fallback='').splitlines()
-        requirements = requires_dist + dev_requires
+        requirements = self.parsed_requirements
 
         if not requirements:
             return
@@ -205,13 +220,12 @@ class Installer(object):
         else:
             shutil.copy2(src, dst)
 
-        if 'scripts' in self.cfg:
-            scripts = self.cfg['scripts']
-            self.install_scripts(scripts, dirs['scripts'])
+        if self.parsed_scripts:
+            self.install_scripts(self.parsed_scripts, dirs['scripts'])
 
 def main():
-    ap = argparse.ArgumentParser('flit-install-py2', version=__version__)
-    ap.add_argument('-f', '--ini-file', default='flit.ini')
+    ap = argparse.ArgumentParser(prog='flit-install-py2')
+    ap.add_argument('-f', '--ini-file', default='pyproject.toml')
     ap.add_argument('-s', '--symlink', action='store_true')
     opts = ap.parse_args()
 
